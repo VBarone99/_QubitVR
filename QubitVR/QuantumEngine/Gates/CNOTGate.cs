@@ -1,0 +1,154 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using System;
+using Complex = System.Numerics.Complex;
+using MathNet.Numerics.LinearAlgebra;
+
+/// <summary>
+/// Quantum gate child class. Applies a conditional X Gate to a target qubit if a control qubit is 1.
+/// </summary>
+public class CNOTGate : Gate
+{
+    /// <summary>
+    /// The qubit index used as the control qubit.
+    /// </summary>
+    public int m_controlIndex { get; }
+
+    /// <summary>
+    /// The qubit index in which the XGate will be applied to.
+    /// </summary>
+    public int m_targetIndex { get; }
+
+    /// <summary>
+    /// Constructs a CNOTGate given the number of qubits, a control qubit index, and a target index to apply the gate to.
+    /// </summary>
+    /// <param name="qubits">Number of qubits in the system.</param>
+    /// <param name="controlIndex">Qubit index that determines if the X gate is applied to the targetIndex.</param>
+    /// <param name="targetIndex">Qubit index to apply the CNOTGate to.</param>
+    public CNOTGate(int qubits, int controlIndex, int targetIndex)
+    {
+        // Ensure positive integer number of qubits
+        if (qubits < 1)
+        {
+            Debug.LogError("Number of qubits must be a positive integer.");
+            return;
+        }
+
+        // Check that the controlIndex is appropriate for the number of qubits in the system.
+        if (controlIndex < 0 || controlIndex > qubits - 1)
+        {
+            Debug.LogError("Control index provided to constructor CNOTGate(int qubits, int controlIndex, int targetIndex) is out of range. Index of " + controlIndex +
+                " provided. Index in range [0, " + (qubits - 1) + "] expected.");
+            return;
+        }
+
+        // Check that the targetIndex is appropriate for the number of qubits in the system.
+        if (targetIndex < 0 || targetIndex > qubits - 1)
+        {
+            Debug.LogError("Target index provided to constructor CNOTGate(int qubits, int controlIndex, int targetIndex) is out of range. Index of " + targetIndex +
+                " provided. Index in range [0, " + (qubits - 1) + "] expected.");
+            return;
+        }
+
+        m_numQubits = qubits;
+        m_controlIndex = controlIndex;
+        m_targetIndex = targetIndex;
+        m_type = "CNOTGate";
+        m_matrix = NthRootMatrix(1);
+    }
+
+    /// <summary>
+    /// Construct an Nth root CNOTGate.
+    /// </summary>
+    /// <param name="n">The root degree to take of the current gate matrix.
+    /// n=2 -> square root of the current gate matrix. n=3 -> cube root of the current gate matrix. etc.</param>
+    /// <returns>Completed Nth root CNOTGate object</returns>
+    public override Gate NthRootGate(int n)
+    {
+        // Ensure that NthRoot to be calculated is valid. Must be a positive integer.
+        if (n < 1)
+        {
+            Debug.LogError("Must provide a positive integer for NthRootGate");
+            return new Gate(m_numQubits, NthRootMatrix(1));
+        }
+
+        return new Gate(m_numQubits, NthRootMatrix(n));
+    }
+
+    /// <summary>
+    /// Construct the Nth root matrix of the current gate.
+    /// </summary>
+    /// <param name="n">The root degree to take of the current gate matrix.
+    /// n=2 -> square root of the current gate matrix. n=3 -> cube root of the current gate matrix. etc.</param>
+    /// <returns>Nth root matrix of the CNOTGate</returns>
+    protected override Matrix<Complex> NthRootMatrix(int n)
+    {
+        // Ensure that NthRoot to be calculated is valid. Must be a positive integer.
+        if (n < 1)
+        {
+            Debug.LogError("Must provide a positive integer for NthRootMatrix");
+            // Return the proper size identity matrix if the 'n' is invalid.
+            return Matrix<Complex>.Build.SparseIdentity((int)Math.Pow(2, m_numQubits), (int)Math.Pow(2, m_numQubits));
+        }
+
+        // =========================
+        // Calculate Nth Root Matrix
+        // =========================
+        double theta = Math.PI;
+        Matrix<Complex> identity = Matrix<Complex>.Build.SparseIdentity(2, 2);
+        Matrix<Complex> piUp = new PiUpProjector(1, 0).GetMatrix();
+        Matrix<Complex> piDown = new PiDownProjector(1, 0).GetMatrix();
+        Matrix<Complex> pauliX = Matrix<Complex>.Build.Sparse(2, 2);
+        pauliX[0, 1] = new Complex(1, 0);
+        pauliX[1, 0] = new Complex(1, 0);
+
+        Complex product1 = new Complex(Math.Cos(-theta / (2 * n)), Math.Sin(-theta / (2 * n)));
+        Complex product2 = new Complex(Math.Cos(theta / (2 * n)), Math.Sin(theta / (2 * n)));
+
+        Matrix<Complex> A = identity.Multiply(new Complex(product1.Real * product2.Real, 0.0f));
+        Matrix<Complex> B = pauliX.Multiply(new Complex(0.0f, product1.Real * product2.Imaginary));
+        Matrix<Complex> C = identity.Multiply(new Complex(0.0f, product1.Imaginary * product2.Real));
+        Matrix<Complex> D = pauliX.Multiply(new Complex(-product1.Imaginary * product2.Imaginary, 0.0f));
+        Matrix<Complex> NthRootMatrix = A.Add(B).Add(C).Add(D);
+
+        // =======================================================
+        // Calculate Qubit System Matrix using the Nth Root Matrix
+        // =======================================================
+        // Calculate the control-portion of the CNOT gate.
+        Matrix<Complex> controlTerm;
+        if (m_controlIndex == 0)
+            controlTerm = piUp;
+        else
+            controlTerm = identity;
+
+        for (int currentIndex = 1; currentIndex < m_numQubits; currentIndex++)
+        {
+            if (currentIndex == m_controlIndex)
+                controlTerm = controlTerm.KroneckerProduct(piUp);
+            else
+                controlTerm = controlTerm.KroneckerProduct(identity);
+        }
+
+        // Calculate the target-portion of the CNOT gate.
+        Matrix<Complex> targetTerm;
+        if (m_controlIndex == 0)
+            targetTerm = piDown;
+        else if (m_targetIndex == 0)
+            targetTerm = NthRootMatrix;
+        else
+            targetTerm = identity;
+
+        for (int currentIndex = 1; currentIndex < m_numQubits; currentIndex++)
+        {
+            if (currentIndex == m_controlIndex)
+                targetTerm = targetTerm.KroneckerProduct(piDown);
+            else if (currentIndex == m_targetIndex)
+                targetTerm = targetTerm.KroneckerProduct(NthRootMatrix);
+            else
+                targetTerm = targetTerm.KroneckerProduct(identity);
+        }
+
+        return controlTerm.Add(targetTerm);
+    }
+}
